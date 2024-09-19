@@ -8,84 +8,234 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 )
 
+var pubKey []byte
+
 func main() {
-    if err := InstallWireguard(); err == nil {
-        fmt.Printf("Wireguard installed\n")
-    } else {
+    if err := InstallWireguard(); err != nil {
+        fmt.Printf("%s\n", err)
+        //return
+    }
+    fmt.Printf("Wireguard installed\n")
+
+    if err := CreateWgConfig(); err != nil {
         fmt.Printf("%s\n", err)
         return
     }
-    if err := CreateWgConfig(); err == nil {
+    fmt.Printf("Config crated\n")
 
-    } else {
+    if err := StartWgService(); err != nil {
+        fmt.Printf("%s\n", err)
+        return
+    }
+    fmt.Printf("Service started\n")
 
+    if err := makeClientConfig(); err != nil {
+        fmt.Printf("%s\n", err)
+        return
+    }
+    if err := exec.Command("systemctl", "restart", "wg-quick@wg0.service").Run(); err != nil {
+        fmt.Printf("%s\n", err)
+        return
     }
 }
+
+
+func makeClientConfig() error {
+    privateKey, err := genPrivateKey()
+    if err != nil {
+        return err
+    }
+    pubKeyClt, err := genPublicKey(privateKey)
+    if err != nil {
+        return err
+    }
+
+    if err := addNewPeer(pubKeyClt); err != nil {
+        return err
+    }
+
+    if err := createClientConfigFile(privateKey); err != nil {
+        return err
+    }
+    return nil
+}
+
+
+func addNewPeer(pubKeyClt []byte) error {
+    file, err := os.OpenFile("/etc/wireguard/wg0.conf", os.O_APPEND|os.O_WRONLY, 0644)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    file.WriteString("\n[Peer]\n")
+    file.WriteString(fmt.Sprintf("PublicKey = %s\n", string(pubKeyClt)))
+    file.WriteString("AllowedIPs = 10.101.0.2\n")
+    file.Sync()
+    return nil
+}
+
+func createClientConfigFile(prvKey []byte) error {
+    configFile, err := os.Create("test.conf")
+    if err != nil {
+        return fmt.Errorf("error with creating file: %w", err)
+    }
+    defer configFile.Close()
+
+    configFile.WriteString("[Interface]\n")
+    configFile.WriteString(fmt.Sprintf("PrivateKey = %s\n", string(prvKey)))
+    configFile.WriteString("Address = 10.101.0.2/24\n")
+    configFile.WriteString("DNS = 8.8.8.8\n")
+
+    ip, err := getIp()
+    if err != nil {
+        return  err
+    }
+    configFile.WriteString("\n[Peer]\n")
+    configFile.WriteString(fmt.Sprintf("PublicKey = %s\n", string(pubKey)))
+    configFile.WriteString(fmt.Sprintf("Endpoint = %s:51830\n", ip))
+    configFile.WriteString("AllowedIPs = 0.0.0.0/0\n")
+    configFile.WriteString("PersistentKeepalive = 20\n")
+
+    configFile.Sync()
+
+    return nil
+}
+
+
+func StartWgService() error {
+    file, err := os.OpenFile("/etc/sysctl.conf", os.O_APPEND|os.O_WRONLY, 0644)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    file.WriteString("\nnet.ipv4.ip_forward=1\n")
+
+    if err := exec.Command("systemctl", "enable", "wg-quick@wg0.service").Run(); err != nil {
+        return err
+    }
+
+    if err := exec.Command("systemctl", "start", "wg-quick@wg0.service").Run(); err != nil {
+        return err
+    }
+    status, err := exec.Command("systemctl", "start", "wg-quick@wg0.service").Output()
+    if  err != nil {
+        return err
+    }
+    fmt.Printf("%s\n", status)
+    return nil
+}
+
 
 func CreateWgConfig() error {
     workingDir, _ := os.Getwd()
     if err := os.Chdir("/etc/wireguard/"); err != nil {
-        fmt.Errorf("Cant move to /etc/wireguard/: %s\n", err)
+        return fmt.Errorf("cant move to /etc/wireguard/: %w", err)
     }
     privateKey, err := genPrivateKey()
     if err != nil {
-        return fmt.Errorf("Creting config: %w\n", err)
+        return fmt.Errorf("creting config: %w", err)
     }
-    _, err = genPublicKey(privateKey)
+    pubKey, err = genPublicKey(privateKey)
     if err != nil {
-        return fmt.Errorf("Creting config: %w\n", err)
+        return fmt.Errorf("creting config: %w", err)
     }
-
-    fmt.Println(workingDir)
+    if err := createConfigFile(privateKey); err != nil {
+        return err
+    }
+    if err := os.Chdir(workingDir); err != nil {
+        return fmt.Errorf("cant move to %s: %w", workingDir, err)
+    }
     return nil
 }
 
 func createConfigFile(prvKey []byte) error {
     configFile, err := os.Create("wg0.conf")
     if err != nil {
-        return fmt.Errorf("Error with creating file: %w\n", err)
+        return fmt.Errorf("error with creating file: %w", err)
     }
-    configFile.WriteString("[Interface]\n")
-    configFile.WriteString(fmt.Sprintf("PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE"))
-    configFile.WriteString(fmt.Sprintf("PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE\n",))
+    defer configFile.Close()
 
+    configFile.WriteString("[Interface]\n")
+    configFile.WriteString(fmt.Sprintf("PrivateKey = %s\n", string(prvKey)))
+    configFile.WriteString("Address = 10.101.0.1/24\n")
+    if err := exec.Command("ufw", "allow", "51830").Run(); err != nil {
+        return err
+    }
+    configFile.WriteString("ListenPort = 51830\n")
+    eth, err := getIpInterface()
+    if err != nil {
+        return  err
+    }
+    configFile.WriteString(fmt.Sprintf("PostUp = iptables -A FORWARD -i %si -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE\n", "%", eth))
+    configFile.WriteString(fmt.Sprintf("PostDown = iptables -D FORWARD -i %si -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE\n", "%", eth))
+    configFile.Sync()
     return nil
 }
-
-func getOutboundInterface()
 
 func genPrivateKey() ([]byte, error) {
     privateKey, err := exec.Command("wg", "genkey").Output()
     if err != nil {
-        return nil, fmt.Errorf("Error with generating a private key: %w\n", err)
+        return nil, fmt.Errorf("error with generating a private key: %w", err)
     }
     prvFile, err := os.Create("private_key")
     if err != nil {
-        return nil, fmt.Errorf("Error with creating file: %w\n", err)
+        return nil, fmt.Errorf("error with creating file: %w", err)
     }
     defer prvFile.Close()
-    prvFile.Write(privateKey)
+    prvFile.Write(privateKey[:len(privateKey)-1])
     return privateKey, nil
 }
 
 func genPublicKey(prvKey []byte) ([]byte, error) {
-    cmd := exec.Command("wg", "genkey")
+    cmd := exec.Command("wg", "pubkey")
     cmdStdin, _ := cmd.StdinPipe()
-    io.WriteString(cmdStdin, string(prvKey))
-    publicKey, err := cmd.Output()
+    go func() {
+        defer cmdStdin.Close()
+        io.WriteString(cmdStdin, string(prvKey))
+    }()
+    publicKey, err := cmd.CombinedOutput()
+    publicKey = publicKey[:len(publicKey)-1]
     if err != nil {
-        return nil, fmt.Errorf("Error with generating a public key: %w\n", err)
+        return nil, fmt.Errorf("error with generating a public key: %w", err)
     }
     pubFile, err := os.Create("public_key")
     if err != nil {
-        return nil, fmt.Errorf("Error with creating file: %w\n", err)
+        return nil, fmt.Errorf("error with creating file: %w", err)
     }
     defer pubFile.Close()
     pubFile.Write(publicKey)
     return publicKey, nil
 }
+
+
+func getIpInterface() (string, error) {
+    outIP, err := getIp()
+    if err != nil {
+        return "", err
+    }
+    inter, err := net.Interfaces()
+    if err != nil {
+        return "", err
+    }
+    for i := range inter {
+        addrs, err := inter[i].Addrs()
+        if err != nil {
+            return "", err
+        }
+        for j := range addrs {
+            if ipnet, ok := addrs[j].(*net.IPNet); ok {
+                if ipnet.IP.Mask(ipnet.Mask).Equal(net.ParseIP(outIP).Mask(ipnet.Mask)) {
+                    return inter[i].Name, nil
+                }
+            }
+        }
+    }
+    return "", fmt.Errorf("can`t find interface")
+}
+
 
 func getIp() (string, error) {
     conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -93,8 +243,7 @@ func getIp() (string, error) {
         return "", err
     }
     defer conn.Close()
-    localAddr := conn.LocalAddr().(*net.UDPAddr)
-    return localAddr.IP.String(), nil
+    return strings.Split(conn.LocalAddr().String(), ":")[0], nil
 } 
 
 func InstallWireguard() error {
@@ -102,7 +251,7 @@ func InstallWireguard() error {
     cmd.Stderr = os.Stdout
     err := cmd.Run()
     if err == nil {
-        return fmt.Errorf("Wireguard alredy install\n")
+        return fmt.Errorf("wireguard alredy install")
     }
     cmd = exec.Command("apt", "install", "wireguard")
     var stdErrBuf bytes.Buffer
@@ -127,7 +276,7 @@ func InstallWireguard() error {
         }
     }
     if len(stdErrBuf.Bytes()) != 0 {
-        fmt.Errorf("Wireguard fail to install\n")
+        return fmt.Errorf("wireguard fail to install")
     }
     return nil
 }
