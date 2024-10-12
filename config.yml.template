@@ -1,0 +1,6 @@
+vpn:
+  repo:
+    config_save_dir: "/etc/wireguard"
+    server_config_name: ""
+bot:
+  token: ""

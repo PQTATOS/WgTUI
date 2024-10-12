@@ -7,6 +7,8 @@ type BotClient interface {
 	SendMessage(int, string) error
 	SendPhoto(int, string) error
 	SendDocument(int, string) error
+	SendPhotoRaw(int, []byte) error
+	SendDocumentRaw(int, []byte) error
 }
 
 type Response struct {

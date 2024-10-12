@@ -34,7 +34,7 @@ func (vpnClient *TestVpn) NewConfig(cfgName string) (vpn.Config, error) {
 	defer file.Close()
 	file.WriteString("Hello")
 
-	return vpn.Config{Meta: file.Name()}, nil
+	return vpn.Config{FilePath: file.Name()}, nil
 }
 
 func (vpnClient *TestVpn) newFile(cfgName string) (*os.File, error) {

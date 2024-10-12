@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -77,7 +76,11 @@ func (bot *Client) SendMessage(chat_id int, text string) error {
 
 
 func (bot *Client) SendPhoto(chat_id int, filename string) error {
-	err := bot.sendFile(chat_id, filename, "photo", "sendPhoto")
+	file, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+	err = bot.sendFile(chat_id, file, filename, "photo", "sendPhoto")
 	if err != nil {
 		return err
 	}
@@ -86,7 +89,11 @@ func (bot *Client) SendPhoto(chat_id int, filename string) error {
 
 
 func (bot *Client) SendDocument(chat_id int, filename string) error {
-	err := bot.sendFile(chat_id, filename, "document", "sendDocument")
+	file, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+	err = bot.sendFile(chat_id, file, filename,"document", "sendDocument")
 	if err != nil {
 		return err
 	}
@@ -94,13 +101,25 @@ func (bot *Client) SendDocument(chat_id int, filename string) error {
 }
 
 
-func (bot *Client) sendFile(chat_id int, filename,  mediaType, apiReq string) error {
-	img, fileErr := os.Open(filename)
-	if fileErr != nil {
-		return fmt.Errorf("sendFile: error while opening file: %w", fileErr)
+func (bot *Client) SendPhotoRaw(chat_id int, file []byte) error {
+	err := bot.sendFile(chat_id, file, "photo", "photo", "sendPhoto")
+	if err != nil {
+		return err
 	}
-	defer img.Close()
+	return nil
+}
 
+
+func (bot *Client) SendDocumentRaw(chat_id int, file []byte) error {
+	err := bot.sendFile(chat_id, file, "document", "document", "sendDocument")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+
+func (bot *Client) sendFile(chat_id int, file []byte, filename, mediaType, apiReq string) error {
 	body := &bytes.Buffer{}
 	formWrite := multipart.NewWriter(body)
 	if err := formWrite.WriteField("chat_id", strconv.Itoa(chat_id)); err != nil {
@@ -110,7 +129,7 @@ func (bot *Client) sendFile(chat_id int, filename,  mediaType, apiReq string) er
 	if fwErr != nil {
 		return fmt.Errorf("sendFile: error with creating file field: %w", fwErr)
 	}
-	if _, err := io.Copy(fw, img); err != nil {
+	if _, err := fw.Write(file); err != nil {
 		return fmt.Errorf("sendFile: error while copying to fieldWriter: %w", err)
 	}
 	formWrite.Close()

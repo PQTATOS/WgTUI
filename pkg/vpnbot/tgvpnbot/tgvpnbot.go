@@ -12,7 +12,7 @@ import (
 
 type Processor struct {
 	TgClient clients.BotClient
-	WireguardClient vpn.VPNClient
+	WireguardClient vpn.VPNServer
 	updateId int
 	handlers map[string]func(vpnbot.Event, vpnbot.Processor)
 }
@@ -23,7 +23,7 @@ type Meta struct {
 	UpdateID int
 }
 
-func New(bot clients.BotClient, vpn vpn.VPNClient) *Processor {
+func New(bot clients.BotClient, vpn vpn.VPNServer) *Processor {
 	return &Processor{
 		TgClient: bot,
 		WireguardClient: vpn,

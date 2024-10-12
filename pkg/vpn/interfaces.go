@@ -1,9 +1,10 @@
 package vpn
 
-type VPNClient interface {
-	NewConfig(cfgName string) (Config, error)
+type VPNServer interface {
+	NewConfig(cfgName string) (*Config, error)
 }
 
 type Config struct {
-	Meta interface{}
+	FilePath string
+	Data []byte
 }
